@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>DAG Agent Explorer</title>
+<!-- vis-network from CDN (no version pin to avoid 404) -->
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #0d1117;
+  --surface: #161b22;
+  --border:  #30363d;
+  --muted:   #6e7681;
+  --text:    #e6edf3;
+  --accent:  #58a6ff;
+  --green:   #3fb950;
+  --yellow:  #d29922;
+  --red:     #f85149;
+  --orange:  #f0883e;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── header ── */
+#header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 16px 8px;
+  flex-shrink: 0;
+}
+#header h1 { font-size: 1rem; font-weight: 600; color: var(--accent); margin-bottom: 8px; }
+
+#query-row { display: flex; gap: 8px; align-items: flex-start; }
+#query-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  padding: 7px 10px;
+  resize: none;
+  height: 48px;
+  font-family: inherit;
+}
+#query-input:focus { outline: none; border-color: var(--accent); }
+
+#run-btn {
+  background: #1f6feb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0 18px;
+  height: 48px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+#run-btn:hover:not(:disabled) { background: #388bfd; }
+#run-btn:disabled { background: var(--border); color: var(--muted); cursor: default; }
+
+#suggestions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
+#suggestions .lbl { font-size: 0.72rem; color: var(--muted); }
+.sug { background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+       border-radius: 4px; padding: 3px 9px; font-size: 0.72rem; cursor: pointer; }
+.sug:hover { border-color: var(--accent); color: var(--accent); }
+
+#session-badge { font-size: 0.7rem; color: var(--muted); margin-top: 4px; min-height: 1em; }
+
+/* ── main layout ── */
+#main { flex: 1; display: flex; overflow: hidden; min-height: 0; }
+
+/* ── left: graph (fix 1: use absolute-fill canvas inside relative parent) ── */
+#graph-col {
+  flex: 0 0 62%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow: hidden;     /* important: clip the canvas */
+}
+
+#graph-toolbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+#graph-toolbar .title { font-weight: 600; color: var(--text); }
+#node-count { margin-left: auto; }
+
+.legend { display: flex; gap: 10px; align-items: center; }
+.leg { display: flex; gap: 4px; align-items: center; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* FIX 1: wrap is position:relative so canvas can fill it with position:absolute */
+#graph-wrap {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* FIX 1: canvas fills wrap via absolute, so vis-network always measures non-zero height */
+#vis-container {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+}
+
+/* ── right: logs + output ── */
+#right-col { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+
+.panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel-head {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+#log-panel { flex: 0 0 45%; border-bottom: 1px solid var(--border); }
+#log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 10px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.69rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.ll { white-space: pre-wrap; word-break: break-all; }
+.ll-ok   { color: var(--green); }
+.ll-info { color: var(--accent); }
+.ll-err  { color: var(--red); }
+.ll-warn { color: var(--yellow); }
+
+#out-panel { flex: 1; overflow: hidden; }
+#out-body { flex: 1; overflow-y: auto; padding: 10px 12px; font-size: 0.82rem; line-height: 1.65; }
+#out-body p { margin: 3px 0; }
+
+#waiting { color: var(--muted); font-style: italic; }
+#final-answer { display: none; }
+
+#timing-card {
+  display: none;
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+#timing-card h4 { font-size: 0.75rem; color: var(--orange); margin-bottom: 8px; }
+.tr { display: flex; justify-content: space-between; font-size: 0.73rem; padding: 2px 0; color: var(--muted); }
+.tr .tv { color: var(--text); }
+
+/* ── error banner ── */
+#error-banner {
+  display: none;
+  margin: 8px;
+  padding: 10px 12px;
+  background: #2d0000;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  color: var(--red);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+#error-banner strong { display: block; margin-bottom: 4px; font-size: 0.85rem; }
+#error-banner pre {
+  margin-top: 6px;
+  font-size: 0.69rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #ff8585;
+  background: #1a0000;
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-y: auto;
+  max-height: 180px;
+}
+
+/* node detail card floating in graph panel */
+#node-info {
+  display: none;
+  position: absolute;
+  bottom: 10px; left: 10px;
+  background: #1c2128;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.71rem;
+  max-width: 260px;
+  z-index: 5;
+  pointer-events: none;
+  line-height: 1.5;
+}
+#node-info strong { color: var(--accent); display: block; margin-bottom: 4px; }
+.ni-row { display: flex; gap: 6px; }
+.ni-k { color: var(--muted); flex-shrink: 0; min-width: 52px; }
+.ni-v { color: var(--text); word-break: break-word; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>◈ DAG Agent Explorer</h1>
+  <div id="query-row">
+    <textarea id="query-input" placeholder="Enter a query, or pick a demo below…"></textarea>
+    <button id="run-btn" onclick="runQuery()">Run ▶</button>
+  </div>
+  <div id="suggestions">
+    <span class="lbl">Demos →</span>
+    <button class="sug" onclick="pick(0)">① Parallel Fan-out</button>
+    <button class="sug" onclick="pick(1)">② Critic Verdict</button>
+    <button class="sug" onclick="pick(2)">③ Coder Compute</button>
+    <button class="sug" onclick="pick(3)">④ Translator (new skill)</button>
+  </div>
+  <div id="session-badge"></div>
+</div>
+
+<div id="main">
+
+  <div id="graph-col">
+    <div id="graph-toolbar">
+      <span class="title">Live DAG</span>
+      <div class="legend">
+        <div class="leg"><div class="dot" style="background:#30363d"></div>pending</div>
+        <div class="leg"><div class="dot" style="background:#d29922"></div>running</div>
+        <div class="leg"><div class="dot" style="background:#3fb950"></div>complete</div>
+        <div class="leg"><div class="dot" style="background:#f85149"></div>failed</div>
+      </div>
+      <span id="node-count">0 nodes</span>
+    </div>
+    <div id="graph-wrap">
+      <!-- FIX 1: absolute-fill div so vis-network always sees a real size -->
+      <div id="vis-container"></div>
+      <div id="node-info">
+        <strong id="ni-title"></strong>
+        <div class="ni-row"><span class="ni-k">status</span><span class="ni-v" id="ni-status"></span></div>
+        <div class="ni-row"><span class="ni-k">elapsed</span><span class="ni-v" id="ni-elapsed"></span></div>
+        <div class="ni-row" id="ni-q-row" style="display:none"><span class="ni-k">question</span><span class="ni-v" id="ni-q"></span></div>
+        <div class="ni-row" id="ni-err-row" style="display:none"><span class="ni-k">error</span><span class="ni-v" id="ni-err" style="color:var(--red)"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="right-col">
+    <div id="log-panel" class="panel">
+      <div class="panel-head">Execution Log</div>
+      <div id="log-body"></div>
+    </div>
+    <div id="out-panel" class="panel">
+      <div class="panel-head">Output</div>
+      <div id="out-body">
+        <div id="error-banner"></div>
+        <div id="waiting">Waiting for run to complete…</div>
+        <div id="final-answer"></div>
+        <div id="timing-card">
+          <h4>⏱ Parallel Timing Analysis</h4>
+          <div id="timing-rows"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── demo queries ────────────────────────────────────────────────────────────
+const DEMOS = [
+  `Find the current GDP per capita, capital city, and largest export of Brazil, South Korea, and Nigeria. Present a comparison across all three countries.`,
+  `Write a haiku about the concept of machine learning. Strict requirement: exactly 5 syllables in line 1, exactly 7 syllables in line 2, exactly 5 syllables in line 3.`,
+  `Find the current annual inflation rates for the US, UK, and Japan. Calculate what $10,000 would be worth in real purchasing power after 5 years under each rate (compounded annually). Rank the three from best to worst for savers.`,
+  `Fetch the Wikipedia introduction for 'quantum entanglement' and translate the key explanation into Spanish.`,
+];
+function pick(i) { document.getElementById('query-input').value = DEMOS[i]; }
+
+// ── skill colour map ────────────────────────────────────────────────────────
+const SKILL_BG = {
+  planner:          '#1e0a42',
+  researcher:       '#0a1e3d',
+  coder:            '#2a1000',
+  sandbox_executor: '#001a2e',
+  formatter:        '#001e0d',
+  critic:           '#200010',
+  distiller:        '#001820',
+  summariser:       '#0a0a2e',
+  retriever:        '#0e1a00',
+  translator:       '#1f0e00',
+};
+const SKILL_BORDER = {
+  planner:          '#7c3aed',
+  researcher:       '#3b82f6',
+  coder:            '#f97316',
+  sandbox_executor: '#38bdf8',
+  formatter:        '#22c55e',
+  critic:           '#ec4899',
+  distiller:        '#06b6d4',
+  summariser:       '#818cf8',
+  retriever:        '#84cc16',
+  translator:       '#fb923c',
+};
+const SKILL_SHAPE = {
+  planner:   'diamond',
+  formatter: 'star',
+  coder:     'box',
+  sandbox_executor: 'box',
+  critic:    'triangle',
+};
+
+// ── state ───────────────────────────────────────────────────────────────────
+// FIX 2: store raw node/edge data and call network.setData() for every
+// update so the hierarchical layout is recomputed from scratch each time
+// (DataSet incremental adds place new nodes at 0,0 in hierarchical mode).
+const gNodes = {};     // id → event payload
+const gEdges = new Map(); // "from=>to" → {from, to}
+const runningSet = new Set();
+let network = null;
+
+// ── vis-network builder ─────────────────────────────────────────────────────
+function buildVisNode(n, pulse) {
+  const bg     = n.status === 'pending'  ? '#0d1117'
+               : n.status === 'failed'   ? '#200000'
+               : n.status === 'skipped'  ? '#0d1117'
+               : (SKILL_BG[n.skill]      || '#111827');
+  const border = n.status === 'running'  ? (pulse ? '#fbbf24' : '#d97706')
+               : n.status === 'failed'   ? '#f85149'
+               : n.status === 'pending'  ? '#30363d'
+               : n.status === 'skipped'  ? '#21262d'
+               : (SKILL_BORDER[n.skill]  || '#6b7280');
+
+  const label = [
+    n.skill,
+    n.id.replace('n:', '#'),
+    n.elapsed != null ? n.elapsed.toFixed(1) + 's' : '',
+  ].filter(Boolean).join('\n');
+
+  return {
+    id:    n.id,
+    label,
+    shape: SKILL_SHAPE[n.skill] || 'dot',
+    size:  (n.skill === 'planner' || n.skill === 'formatter') ? 26 : 20,
+    color: {
+      background: bg,
+      border,
+      highlight: { background: bg, border: '#f0f6fc' },
+      hover:      { background: bg, border: '#c9d1d9' },
+    },
+    borderWidth: n.status === 'running' ? (pulse ? 4 : 2.5) : 2,
+    font: { color: '#c9d1d9', size: 11, face: 'monospace' },
+    title: buildTooltip(n),
+  };
+}
+
+function buildTooltip(n) {
+  const parts = [
+    `<b>${n.skill}</b> · ${n.id}`,
+    `Status: ${n.status}`,
+    n.elapsed != null ? `Time: ${n.elapsed.toFixed(2)} s` : '',
+    n.question ? `Q: ${n.question.substring(0, 120)}` : '',
+    n.error ? `<span style="color:#f85149">Error: ${n.error.substring(0, 100)}</span>` : '',
+  ].filter(Boolean).join('<br>');
+  const div = document.createElement('div');
+  div.innerHTML = parts;
+  return div;
+}
+
+// FIX 2: always call setData so hierarchical layout recalculates
+let pulsePhase = false;
+function rebuildGraph() {
+  if (!network) return;
+  const visNodes = Object.values(gNodes).map(n => buildVisNode(n, pulsePhase));
+  const visEdges = [...gEdges.values()].map((e, i) => ({ id: `e${i}`, from: e.from, to: e.to }));
+  network.setData({ nodes: visNodes, edges: visEdges });
+  network.fit({ animation: { duration: 320, easingFunction: 'easeInOutQuad' } });
+  document.getElementById('node-count').textContent = `${visNodes.length} nodes`;
+}
+
+// pulse running nodes every 700 ms
+setInterval(() => {
+  pulsePhase = !pulsePhase;
+  if (runningSet.size > 0) rebuildGraph();
+}, 700);
+
+// ── SSE graph event ─────────────────────────────────────────────────────────
+function applyGraphEvent({ nodes, edges }) {
+  nodes.forEach(n => {
+    gNodes[n.id] = n;
+    if (n.status === 'running') runningSet.add(n.id);
+    else                        runningSet.delete(n.id);
+    if (n.status === 'failed' && n.error) {
+      appendLog(`[FAILED] ${n.skill} (${n.id}): ${n.error}`);
+      const errBanner = document.getElementById('error-banner');
+      if (errBanner.style.display === 'none') {
+        renderError(`Node ${n.id} (${n.skill}) failed: ${n.error}`);
+        // keep waiting/output visible — don't hide them; just show banner
+        document.getElementById('waiting').style.display = 'none';
+      }
+    }
+  });
+  edges.forEach(e => gEdges.set(`${e.from}=>${e.to}`, e));
+  rebuildGraph();
+}
+
+// ── click → node detail ─────────────────────────────────────────────────────
+function showNodeDetail(nid) {
+  const n = gNodes[nid];
+  if (!n) return;
+  document.getElementById('ni-title').textContent = `${n.skill}  ·  ${n.id}`;
+  document.getElementById('ni-status').textContent  = n.status;
+  document.getElementById('ni-elapsed').textContent = n.elapsed != null ? `${n.elapsed.toFixed(2)} s` : '—';
+  const qRow = document.getElementById('ni-q-row');
+  document.getElementById('ni-q').textContent = n.question || '';
+  qRow.style.display = n.question ? 'flex' : 'none';
+  const eRow = document.getElementById('ni-err-row');
+  document.getElementById('ni-err').textContent = n.error || '';
+  eRow.style.display = n.error ? 'flex' : 'none';
+  document.getElementById('node-info').style.display = 'block';
+}
+
+// ── FIX 3: init vis-network only after the page is fully laid out ───────────
+function initNetwork() {
+  const container = document.getElementById('vis-container');
+  network = new vis.Network(container, { nodes: [], edges: [] }, {
+    layout: {
+      hierarchical: {
+        enabled: true,
+        direction: 'UD',
+        sortMethod: 'directed',
+        levelSeparation: 110,
+        nodeSpacing: 150,
+        blockShifting: true,
+        edgeMinimization: true,
+      },
+    },
+    physics: { enabled: false },
+    nodes: {
+      font: { size: 11, color: '#c9d1d9', face: 'monospace' },
+      borderWidth: 2,
+    },
+    edges: {
+      arrows: { to: { enabled: true, scaleFactor: 0.65 } },
+      color: { color: '#30363d', highlight: '#58a6ff', hover: '#58a6ff' },
+      width: 1.5,
+      smooth: { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.4 },
+    },
+    interaction: { hover: true, tooltipDelay: 150, zoomView: true, dragView: true },
+  });
+
+  network.on('click', p => {
+    if (p.nodes.length) showNodeDetail(p.nodes[0]);
+    else document.getElementById('node-info').style.display = 'none';
+  });
+}
+
+// ── log panel ────────────────────────────────────────────────────────────────
+function appendLog(text) {
+  const el = document.getElementById('log-body');
+  const p = document.createElement('p');
+  p.className = 'll';
+  p.textContent = text;
+  const t = text.toLowerCase();
+  if (t.includes('complete') || t.includes('✓'))           p.classList.add('ll-ok');
+  else if (t.includes('info') || t.includes('fetch'))       p.classList.add('ll-info');
+  else if (t.includes('error') || t.includes('fail') || t.includes('exception')) p.classList.add('ll-err');
+  else if (t.includes('warn') || t.includes('↪'))          p.classList.add('ll-warn');
+  el.appendChild(p);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ── output panel ─────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderError(msg, detail) {
+  document.getElementById('waiting').style.display = 'none';
+  const el = document.getElementById('error-banner');
+  let html = `<strong>Error</strong>${esc(msg)}`;
+  if (detail) html += `<pre>${esc(detail)}</pre>`;
+  el.innerHTML = html;
+  el.style.display = 'block';
+  appendLog('[ERROR] ' + msg);
+}
+
+function renderAnswer(text) {
+  document.getElementById('waiting').style.display = 'none';
+  const el = document.getElementById('final-answer');
+  el.style.display = 'block';
+  el.innerHTML = text.split('\n').map(l => l.trim() ? `<p>${esc(l)}</p>` : '<br>').join('');
+}
+
+function renderTiming() {
+  const researchers = Object.values(gNodes)
+    .filter(n => n.skill === 'researcher' && n.elapsed != null);
+  if (researchers.length < 2) return;
+
+  const maxT = Math.max(...researchers.map(n => n.elapsed));
+  const sumT = researchers.reduce((a, n) => a + n.elapsed, 0);
+  const rows = document.getElementById('timing-rows');
+  rows.innerHTML = '';
+
+  researchers.forEach((n, i) => addRow(rows, `Branch ${i+1} (${n.id})`, `${n.elapsed.toFixed(1)} s`));
+  addRow(rows, 'Parallel wall-clock (actual)', `≈ ${maxT.toFixed(1)} s`, '#3fb950');
+  addRow(rows, 'Sequential would cost',        `≈ ${sumT.toFixed(1)} s`, '#f85149');
+  addRow(rows, 'Parallel speedup',             `${(sumT/maxT).toFixed(1)}×`, '#f0883e');
+
+  document.getElementById('timing-card').style.display = 'block';
+}
+
+function addRow(parent, label, val, color) {
+  const d = document.createElement('div');
+  d.className = 'tr';
+  d.innerHTML = `<span>${esc(label)}</span><span class="tv"${color ? ` style="color:${color}"`:''}">${esc(val)}</span>`;
+  parent.appendChild(d);
+}
+
+// ── run / SSE ────────────────────────────────────────────────────────────────
+let currentES = null;
+
+function resetUI() {
+  Object.keys(gNodes).forEach(k => delete gNodes[k]);
+  gEdges.clear();
+  runningSet.clear();
+  if (network) network.setData({ nodes: [], edges: [] });
+  document.getElementById('log-body').innerHTML = '';
+  document.getElementById('final-answer').innerHTML = '';
+  document.getElementById('final-answer').style.display = 'none';
+  document.getElementById('timing-card').style.display = 'none';
+  document.getElementById('timing-rows').innerHTML = '';
+  document.getElementById('error-banner').style.display = 'none';
+  document.getElementById('error-banner').innerHTML = '';
+  document.getElementById('waiting').style.display = 'block';
+  document.getElementById('session-badge').textContent = '';
+  document.getElementById('node-count').textContent = '0 nodes';
+  document.getElementById('node-info').style.display = 'none';
+}
+
+function setBusy(on) {
+  const btn = document.getElementById('run-btn');
+  btn.disabled = on;
+  btn.textContent = on ? 'Running…' : 'Run ▶';
+}
+
+async function runQuery() {
+  const query = document.getElementById('query-input').value.trim();
+  if (!query) return;
+  if (currentES) { currentES.close(); currentES = null; }
+  resetUI();
+  setBusy(true);
+
+  let sid;
+  try {
+    const resp = await fetch('/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    let data;
+    try { data = await resp.json(); } catch (_) {
+      renderError(`Server returned HTTP ${resp.status} (non-JSON response)`);
+      setBusy(false); return;
+    }
+    if (data.error) { renderError(data.error); setBusy(false); return; }
+    sid = data.session_id;
+  } catch (err) {
+    renderError('Could not reach server', String(err));
+    setBusy(false);
+    return;
+  }
+
+  document.getElementById('session-badge').textContent = `session: ${sid}`;
+
+  const es = new EventSource(`/stream/${sid}`);
+  currentES = es;
+
+  es.addEventListener('log',   e => appendLog(JSON.parse(e.data).text));
+  es.addEventListener('graph', e => applyGraphEvent(JSON.parse(e.data)));
+  es.addEventListener('done',  e => {
+    const { final_answer } = JSON.parse(e.data);
+    renderAnswer(final_answer || '(no final answer captured)');
+    renderTiming();
+    es.close(); currentES = null;
+    setBusy(false);
+  });
+  es.addEventListener('run_error', e => {
+    const d = JSON.parse(e.data);
+    renderError(d.message || 'Unknown error', d.traceback || null);
+    es.close(); currentES = null;
+    setBusy(false);
+  });
+  es.onerror = ev => {
+    // Only surface this if the stream closed unexpectedly (no run_error event)
+    const errBanner = document.getElementById('error-banner');
+    const alreadyShown = errBanner.style.display !== 'none';
+    if (!alreadyShown) {
+      renderError('Stream connection closed unexpectedly. Check the server terminal for details.');
+    }
+    es.close(); currentES = null;
+    setBusy(false);
+  };
+}
+
+// Enter (without Shift) submits
+document.getElementById('query-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runQuery(); }
+});
+
+// FIX 3: initialise vis-network after layout is painted so offsetWidth/Height > 0
+window.addEventListener('load', initNetwork);
+</script>
+</body>
+</html>

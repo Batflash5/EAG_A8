@@ -1,0 +1,12 @@
+mcp[cli]
+httpx
+ddgs
+tavily-python
+crawl4ai
+python-dotenv
+pytest
+pytest-asyncio
+pandas
+numpy
+matplotlib
+requests

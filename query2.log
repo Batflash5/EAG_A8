@@ -1,0 +1,29 @@
+══════════════════════════════════════════════════════════════════════════════
+session s8-e572adcb  ─  query: Fetch https://en.wikipedia.org/wiki/Claude_Shannon and tell me his birthdate, death date, and three key contributions to information theory.
+══════════════════════════════════════════════════════════════════════════════
+[n:1] planner            complete (4.4s)
+[06/12/26 16:41:27] INFO     Processing request of type CallToolRequest                               server.py:727
+[INIT].... → Crawl4AI 0.8.6 
+[FETCH]... ↓ https://en.wikipedia.org/wiki/Claude_Shannon                                                         |
+✓ | ⏱: 1.57s 
+[SCRAPE].. ◆ https://en.wikipedia.org/wiki/Claude_Shannon                                                         |
+✓ | ⏱: 0.24s 
+[COMPLETE] ● https://en.wikipedia.org/wiki/Claude_Shannon                                                         |
+✓ | ⏱: 1.83s 
+[06/12/26 16:41:31] INFO     Processing request of type ListToolsRequest                              server.py:727
+[06/12/26 16:41:32] INFO     Processing request of type CallToolRequest                               server.py:727
+[INIT].... → Crawl4AI 0.8.6 
+[FETCH]... ↓ https://en.wikipedia.org/wiki/Claude_Shannon                                                         |
+✓ | ⏱: 1.36s 
+[SCRAPE].. ◆ https://en.wikipedia.org/wiki/Claude_Shannon                                                         |
+✓ | ⏱: 0.22s 
+[COMPLETE] ● https://en.wikipedia.org/wiki/Claude_Shannon                                                         |
+✓ | ⏱: 1.60s 
+[06/12/26 16:41:36] INFO     Processing request of type CallToolRequest                               server.py:727
+[n:2] researcher         complete (17.9s)
+[n:3] distiller          complete (3.0s)
+[n:4] formatter          complete (3.9s)
+
+══════════════════════════════════════════════════════════════════════════════
+FINAL: Claude Shannon was born on April 30, 1916, and passed away on February 24, 2001. His three key contributions to information theory include: 1) Establishing the 'bit' as the fundamental unit of information linked to entropy; 2) Developing the mathematical model for communication systems and channel capacity; and 3) Establishing the connection between Boolean algebra and digital switching circuits.
+══════════════════════════════════════════════════════════════════════════════
